@@ -1,0 +1,26 @@
+# Runs inv-tui as a kiosk on the Pi's console (tty1), replacing the login
+# prompt. Install:
+#   sudo cp inv-tui.service /etc/systemd/system/
+#   sudo systemctl disable getty@tty1
+#   sudo systemctl enable --now inv-tui
+[Unit]
+Description=InvenTree TUI kiosk
+After=network-online.target
+Wants=network-online.target
+Conflicts=getty@tty1.service
+
+[Service]
+ExecStart=/usr/local/bin/inv-tui
+EnvironmentFile=/etc/inv-tui.env
+Environment=TERM=linux
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+# Restart on crash and also when quit via ctrl+q (kiosk should come back)
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
