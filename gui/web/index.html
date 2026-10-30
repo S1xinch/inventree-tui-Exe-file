@@ -14,7 +14,7 @@
   --accent: #1f5fbf; --accent-text: #ffffff;
   --out: #b42318; --out-bg: #fdecea; --out-fill: #c4320a; --out-ink: #ffffff;
   --low: #8a4a00; --low-bg: #fff4e0; --low-fill: #f5b347; --low-ink: #2b1a00;
-  --meter-ok: #9aa6b8; --meter-track: #ecebe6;
+  --meter-ok: #2e8540; --meter-track: #ecebe6;
   --row-hover: #f0efea; --sel: #e7eefa; --input: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
@@ -23,7 +23,7 @@
     --accent: #7aa7ff; --accent-text: #0b1730;
     --out: #ff8f80; --out-bg: #3a1c19; --out-fill: #c4320a; --out-ink: #ffffff;
     --low: #f3b453; --low-bg: #382910; --low-fill: #f3b453; --low-ink: #2b1a00;
-    --meter-ok: #6d7686; --meter-track: #2c2d29;
+    --meter-ok: #4caf68; --meter-track: #2c2d29;
     --row-hover: #272824; --sel: #1e2a3e; --input: #191a18;
   }
 }
@@ -69,7 +69,9 @@ tr.out .qty { color: var(--out); font-weight: 600; }
 .badge.low { background: var(--low-fill); color: var(--low-ink); }
 .badge.out { background: var(--out-fill); color: var(--out-ink); }
 .meter { position: relative; height: 4px; background: var(--meter-track); border-radius: 2px; margin-top: 5px; width: 72px; margin-left: auto; }
-.meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--meter-ok); }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--meter-ok); transition: width .45s cubic-bezier(.2,.8,.2,1), background-color .35s ease; }
+.meter b { transition: left .45s cubic-bezier(.2,.8,.2,1); }
+@media (prefers-reduced-motion: reduce) { .meter i, .meter b { transition: none; } }
 .meter.low i { background: var(--low-fill); }
 .meter b { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); opacity: .55; }
 aside .meter { width: 100%; height: 6px; margin: 2px 0 14px; }
@@ -194,11 +196,31 @@ const ICON = {
 };
 const badge = p => { const st = statusOf(p); return st === "ok" ? "" : `<span class="badge ${st}" title="${st === "out" ? "Out of stock" : "Below minimum"}">${ICON[st]}${st === "out" ? "Out" : "Low"}</span>`; };
 // Bar showing stock against the minimum (the tick). Full width = twice the minimum.
-const meter = p => {
+// The bar is drawn at its previous length (and colour) and then animated to
+// the new one, so +1/-1 visibly moves it. `where` separates list and panel.
+const barPrev = {};
+// Scale: the bar spans at least twice the minimum, and grows with the stock so
+// it never maxes out. The more you have, the further left the minimum tick sits.
+const barScale = p => Math.max(p.minimum_stock * 2, (p.total_in_stock || 0) * 1.25);
+const meter = (p, where = "list") => {
   if (!(p.minimum_stock > 0)) return "";
-  const pct = Math.min(100, (p.total_in_stock || 0) / (p.minimum_stock * 2) * 100);
-  return `<div class="meter ${statusOf(p)}" aria-hidden="true"><i style="width:${pct}%"></i><b style="left:50%"></b></div>`;
+  const scale = barScale(p);
+  const pct = (p.total_in_stock || 0) / scale * 100, tick = p.minimum_stock / scale * 100;
+  const key = `${where}-${p.pk}`, prev = barPrev[key] || { pct, tick, st: statusOf(p) };
+  return `<div class="meter ${prev.st}" data-bar="${key}" data-pct="${pct}" data-tick="${tick}" data-st="${statusOf(p)}" aria-hidden="true"><i style="width:${prev.pct}%"></i><b style="left:calc(${prev.tick}% - 1px)"></b></div>`;
 };
+function animateBars(root) {
+  const bars = root.querySelectorAll(".meter[data-bar]");
+  if (!bars.length) return;
+  void bars[0].offsetWidth; // commit the starting length before changing it
+  bars.forEach(m => {
+    const pct = Number(m.dataset.pct), tick = Number(m.dataset.tick), st = m.dataset.st;
+    m.className = `meter ${st}`;
+    m.firstElementChild.style.width = pct + "%";
+    m.lastElementChild.style.left = `calc(${tick}% - 1px)`;
+    barPrev[m.dataset.bar] = { pct, tick, st };
+  });
+}
 
 // In the Windows app the page calls the program directly (window.invApi).
 // In a browser (development) it uses the local test server instead.
@@ -266,6 +288,7 @@ function render() {
     </tr>`).join("");
   $("empty").textContent = list.length ? "" : (S.parts.length ? (lowOnly ? "Nothing is below its minimum." : "No matches.") : "No items yet. Click Add item to start.");
   renderDetail();
+  animateBars($("rows"));
 }
 
 function renderDetail() {
@@ -283,7 +306,7 @@ function renderDetail() {
       <div>Minimum<b>${p.minimum_stock ? fmt(p.minimum_stock) : "none"}</b></div>
       ${low ? `<div class="${stCls}">Need<b>${fmt(p.minimum_stock - (p.total_in_stock || 0))} more</b></div>` : ""}
     </div>
-    ${meter(p)}
+    ${meter(p, "panel")}
     ${p.description ? `<div class="notes">${esc(p.description)}</div>` : ""}
     <div class="section">Where it is</div>
     ${rows.length ? `<table class="bins">${rows.map(s => `
@@ -304,6 +327,7 @@ function renderDetail() {
       <button id="editItem">Edit details</button>
       <button id="delItem" class="danger">Delete item</button>
     </div>`;
+  animateBars(d);
 }
 
 // ---- bins / categories by name ----
