@@ -8,7 +8,7 @@ Forked from [AndrewYatzkan/inventree-tui](https://github.com/AndrewYatzkan/inven
 
 Ready-built programs are in the [`windows/`](windows/) and [`mac/`](mac/) folders.
 
-- **Windows, windowed app (recommended):** put `windows/Inventory.exe` in its own folder (e.g. `C:\Inventory`) and double-click it. It opens in its own window with buttons and a clickable list, and closes when you close the window. It uses the Edge engine built into Windows 10 and 11. Source is in [`gui/`](gui/).
+- **Windows, windowed app (recommended):** put `windows/Inventory.exe` in its own folder (e.g. `C:\Inventory`) and double-click it. It opens in its own window with buttons and a clickable list. Everything runs inside the program: no server, no network, nothing to install (it uses the WebView2 component built into Windows 10 and 11). Source is in [`gui/`](gui/).
 - **Windows, terminal version:** `windows/inv-tui.exe` is the original keyboard-driven text interface. Windows SmartScreen may warn because the file is unsigned: choose "More info" then "Run anyway".
 - **Mac (Apple Silicon):** in Terminal, in the folder with the file:
   ```
@@ -161,4 +161,4 @@ console-setup` (e.g. Terminus 16x32).
 
 `go test ./...` runs the UI, store, undo/redo and low-stock tests against a temporary inventory file.
 
-Build the windowed app with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-H=windowsgui -s -w" -o windows/Inventory.exe ./gui` (the icon comes from `gui/rsrc_windows_*.syso`, made with `go-winres simply --icon gui/icon.png --manifest gui`). Cross-compile the terminal version with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o windows/inv-tui.exe .` and `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o mac/inv-tui-mac .`
+Build the windowed app with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-H=windowsgui -s -w" -o windows/Inventory.exe ./gui` (the icon and version info come from `gui/rsrc_windows_*.syso`, regenerated with `cd gui && go-winres make` from `gui/winres/winres.json`). Cross-compile the terminal version with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o windows/inv-tui.exe .` and `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o mac/inv-tui-mac .`

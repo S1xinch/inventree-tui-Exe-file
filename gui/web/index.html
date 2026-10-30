@@ -158,10 +158,19 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const fmt = n => Number.isInteger(n) ? String(n) : n.toFixed(2);
 const isLow = p => p.minimum_stock > 0 && (p.total_in_stock || 0) < p.minimum_stock;
 
+// In the Windows app the page calls the program directly (window.invApi).
+// In a browser (development) it uses the local test server instead.
+const DIRECT = typeof window.invApi === "function";
+
 async function api(method, path, body) {
+  const payload = body === undefined ? "" : JSON.stringify(body);
+  if (DIRECT) {
+    try { return JSON.parse(await window.invApi(method, path, payload)); }
+    catch (e) { throw new Error(typeof e === "string" ? e : (e && e.message) || String(e)); }
+  }
   let r;
   try {
-    r = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Inventory": "1" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    r = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Inventory": "1" }, body: payload || undefined });
   } catch (e) {
     lostConnection();
     throw new Error("The Inventory program isn't responding. Reconnecting...");
@@ -421,8 +430,10 @@ setInterval(() => checkLow(true), CHECK_EVERY_MS);
 
 // keep the app alive while the window is open; tell it when we close
 function ping() { return fetch("/api/ping", { cache: "no-store" }).then(r => r.ok); }
-setInterval(() => ping().catch(lostConnection), 10000);
-addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));
+if (!DIRECT) {
+  setInterval(() => ping().catch(lostConnection), 10000);
+  addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));
+}
 
 // if the program behind the window stops, say so plainly and keep retrying
 let reconnecting = false;
@@ -447,7 +458,7 @@ function lostConnection() {
   if ("Notification" in window && Notification.permission === "default") {
     document.addEventListener("click", () => Notification.requestPermission(), { once: true });
   }
-  fetch("/api/ping").catch(() => {});
+  if (!DIRECT) ping().catch(() => {});
 })();
 </script>
 </body>
