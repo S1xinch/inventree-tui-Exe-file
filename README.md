@@ -9,6 +9,7 @@ Forked from [AndrewYatzkan/inventree-tui](https://github.com/AndrewYatzkan/inven
 Ready-built programs are in the [`windows/`](windows/) and [`mac/`](mac/) folders.
 
 - **Windows, windowed app (recommended):** put `windows/Inventory.exe` in its own folder (e.g. `C:\Inventory`) and double-click it. It opens in its own window with buttons and a clickable list. Everything runs inside the program: no server, no network, nothing to install (it uses the WebView2 component built into Windows 10 and 11). Source is in [`gui/`](gui/).
+- **Windows, local-server version:** `windows/Inventory Server.exe` has the same interface, but runs a small private server on `127.0.0.1` (your PC only, never the network) and shows it in an Edge app window. Use it if the version above won't open, or if you'd rather open the page in your own browser at `http://127.0.0.1:47615`. It quits a few seconds after its window closes. Build with `-tags server`.
 - **Windows, terminal version:** `windows/inv-tui.exe` is the original keyboard-driven text interface. Windows SmartScreen may warn because the file is unsigned: choose "More info" then "Run anyway".
 - **Mac (Apple Silicon):** in Terminal, in the folder with the file:
   ```
