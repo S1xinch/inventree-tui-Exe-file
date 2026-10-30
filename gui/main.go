@@ -10,7 +10,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -28,6 +30,15 @@ import (
 
 //go:embed web
 var webFS embed.FS
+
+// release is bumped by hand; the fingerprint changes whenever the interface does.
+const release = "1.2"
+
+var version = func() string {
+	page, _ := webFS.ReadFile("web/index.html")
+	sum := sha256.Sum256(page)
+	return release + "." + hex.EncodeToString(sum[:])[:6]
+}()
 
 func main() {
 	dataFlag := flag.String("data", "", "inventory JSON file (default: inventory.json next to the program)")
@@ -144,13 +155,26 @@ func (s *server) markWritten() {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	web, _ := fs.Sub(webFS, "web")
-	mux.Handle("GET /", http.FileServer(http.FS(web)))
+	files := http.FileServer(http.FS(web))
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		files.ServeHTTP(w, r)
+	}))
+	// A newer copy of the program asks an older running one to step aside.
+	mux.HandleFunc("POST /api/quit", func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		go func() { time.Sleep(200 * time.Millisecond); os.Exit(0) }()
+	})
 
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.lastPing = time.Now()
 		s.mu.Unlock()
-		writeJSON(w, map[string]string{"app": "inventory"})
+		writeJSON(w, map[string]string{"app": "inventory", "version": version})
 	})
 	mux.HandleFunc("POST /api/bye", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -251,6 +275,7 @@ func (s *server) routes() http.Handler {
 
 type state struct {
 	File       string      `json:"file"`
+	Version    string      `json:"version"`
 	Parts      []Part      `json:"parts"`
 	Stock      []StockItem `json:"stock"`
 	Locations  []Location  `json:"locations"`
@@ -258,7 +283,7 @@ type state struct {
 }
 
 func (s *server) state() (state, error) {
-	st := state{File: s.store.path}
+	st := state{File: s.store.path, Version: version}
 	var err error
 	if st.Parts, err = s.store.FetchParts(); err != nil {
 		return st, err

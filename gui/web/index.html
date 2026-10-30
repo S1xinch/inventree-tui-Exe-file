@@ -255,7 +255,7 @@ async function load() {
   S.parts ||= []; S.stock ||= []; S.locations ||= []; S.categories ||= [];
   $("binList").innerHTML = S.locations.map(l => `<option value="${esc(l.pathstring)}">`).join("");
   $("catList").innerHTML = S.categories.map(c => `<option value="${esc(c.pathstring)}">`).join("");
-  $("foot").textContent = `Saved in ${S.file}  |  ${S.parts.length} items, ${S.locations.length} bins`;
+  $("foot").textContent = `Version ${S.version}  |  Saved in ${S.file}  |  ${S.parts.length} items, ${S.locations.length} bins`;
   render();
   if (lastLowKey && !load.quiet) checkLow(false); // after any change, keep the banner current
 }

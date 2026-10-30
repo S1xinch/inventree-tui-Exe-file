@@ -17,11 +17,16 @@ import (
 func run(srv *server, port int, noWindow bool) {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	url := "http://" + addr + "/"
-	if alreadyRunning(addr) {
-		if !noWindow {
-			openWindow(url)
+	if running, same := runningCopy(addr); running {
+		if same {
+			// the same version is already open: just show another window
+			if !noWindow {
+				openWindow(url)
+			}
+			return
 		}
-		return
+		// an older (or different) version is still running: replace it
+		stopCopy(addr)
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -35,13 +40,35 @@ func run(srv *server, port int, noWindow bool) {
 	srv.waitUntilClosed()
 }
 
-func alreadyRunning(addr string) bool {
+// runningCopy reports whether Inventory is already serving on addr, and
+// whether it is this exact version.
+func runningCopy(addr string) (running, sameVersion bool) {
 	c := http.Client{Timeout: 800 * time.Millisecond}
 	resp, err := c.Get("http://" + addr + "/api/ping")
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer resp.Body.Close()
 	var body map[string]string
-	return json.NewDecoder(resp.Body).Decode(&body) == nil && body["app"] == "inventory"
+	if json.NewDecoder(resp.Body).Decode(&body) != nil || body["app"] != "inventory" {
+		return false, false
+	}
+	return true, body["version"] == version
+}
+
+// stopCopy asks the running copy to quit and waits for the port to free up.
+func stopCopy(addr string) {
+	req, _ := http.NewRequest("POST", "http://"+addr+"/api/quit", nil)
+	req.Header.Set("X-Inventory", "1")
+	c := http.Client{Timeout: 2 * time.Second}
+	if resp, err := c.Do(req); err == nil {
+		resp.Body.Close()
+	}
+	for i := 0; i < 40; i++ {
+		if ln, err := net.Listen("tcp", addr); err == nil {
+			ln.Close()
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
