@@ -199,9 +199,10 @@ const badge = p => { const st = statusOf(p); return st === "ok" ? "" : `<span cl
 // The bar is drawn at its previous length (and colour) and then animated to
 // the new one, so +1/-1 visibly moves it. `where` separates list and panel.
 const barPrev = {};
-// Scale: the bar spans at least twice the minimum, and grows with the stock so
-// it never maxes out. The more you have, the further left the minimum tick sits.
-const barScale = p => Math.max(p.minimum_stock * 2, (p.total_in_stock || 0) * 1.25);
+// Scale: the bar spans at least twice the minimum. Once stock reaches that, the
+// bar is full and the scale grows with the stock, so the minimum tick keeps
+// sliding left the more you have.
+const barScale = p => Math.max(p.minimum_stock * 2, p.total_in_stock || 0);
 const meter = (p, where = "list") => {
   if (!(p.minimum_stock > 0)) return "";
   const scale = barScale(p);
