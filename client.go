@@ -1,112 +1,94 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
-	"time"
+	"sync"
 )
 
-// Client is a minimal InvenTree REST API client (stdlib only).
+// Client is a local, file-backed inventory store. It keeps the same method
+// set the app used against the InvenTree REST API, but everything lives in a
+// single JSON file on this machine. No server, no login.
 type Client struct {
-	BaseURL  string
-	Username string
-	Password string
-	token    string
-	http     *http.Client
+	BaseURL string // path of the data file (shown on the loading screen)
+	path    string
+
+	mu sync.Mutex
+	db storeDB
 }
 
-func NewClient(baseURL, username, password string) *Client {
-	return &Client{
-		BaseURL:  strings.TrimRight(baseURL, "/"),
-		Username: username,
-		Password: password,
-		http:     &http.Client{Timeout: 20 * time.Second},
+type storeDB struct {
+	NextID     int         `json:"next_id"`
+	Parts      []Part      `json:"parts"`
+	Stock      []StockItem `json:"stock"`
+	Locations  []Location  `json:"locations"`
+	Categories []Category  `json:"categories"`
+}
+
+// NewClient opens (or creates) the inventory file at path.
+func NewClient(path string) *Client {
+	return &Client{BaseURL: path, path: path}
+}
+
+// DefaultDataPath puts inventory.json next to the executable, so the data
+// travels with the program and is easy to find and back up.
+func DefaultDataPath() string {
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		return filepath.Join(filepath.Dir(exe), "inventory.json")
 	}
+	return "inventory.json"
 }
 
-// Login exchanges username/password for an API token (avoids the slow
-// Django password hash check on every request).
+// Login loads the data file. A missing file starts an empty inventory.
 func (c *Client) Login() error {
-	var resp struct {
-		Token string `json:"token"`
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, err := os.ReadFile(c.path)
+	if errors.Is(err, os.ErrNotExist) {
+		c.db = storeDB{NextID: 1}
+		return c.saveLocked()
 	}
-	if err := c.do("GET", "/api/user/token/", nil, nil, &resp); err != nil {
-		return err
-	}
-	c.token = resp.Token
-	return nil
-}
-
-func (c *Client) do(method, path string, query url.Values, body any, out any) error {
-	u := c.BaseURL + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(method, u, rdr)
 	if err != nil {
 		return err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if err := json.Unmarshal(data, &c.db); err != nil {
+		return fmt.Errorf("%s is not valid inventory JSON: %w", c.path, err)
 	}
-	req.Header.Set("Accept", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Token "+c.token)
-	} else {
-		req.SetBasicAuth(c.Username, c.Password)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, apiErrorSummary(data))
-	}
-	if out != nil && len(data) > 0 {
-		return json.Unmarshal(data, out)
+	if c.db.NextID < 1 {
+		c.db.NextID = 1
 	}
 	return nil
 }
 
-// apiErrorSummary flattens a DRF error body ({"field": ["msg"], ...}) into one line.
-func apiErrorSummary(data []byte) string {
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err == nil {
-		var parts []string
-		for k, v := range m {
-			parts = append(parts, fmt.Sprintf("%s: %v", k, v))
-		}
-		sort.Strings(parts)
-		s := strings.Join(parts, "; ")
-		if len(s) > 300 {
-			s = s[:300]
-		}
-		return s
+// saveLocked writes atomically: temp file, then rename, so a crash mid-write
+// never leaves a half-written inventory behind.
+func (c *Client) saveLocked() error {
+	data, err := json.MarshalIndent(c.db, "", "  ")
+	if err != nil {
+		return err
 	}
-	s := string(data)
-	if len(s) > 300 {
-		s = s[:300]
+	if dir := filepath.Dir(c.path); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
 	}
-	return s
+	tmp := c.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, c.path)
+}
+
+func (c *Client) newID() int {
+	id := c.db.NextID
+	c.db.NextID++
+	return id
 }
 
 // ---- Models ----
@@ -118,8 +100,8 @@ type Part struct {
 	Description  string  `json:"description"`
 	Keywords     string  `json:"keywords"`
 	Category     int     `json:"category"`
-	CategoryName string  `json:"category_name"`
-	TotalInStock float64 `json:"total_in_stock"`
+	CategoryName string  `json:"category_name,omitempty"`
+	TotalInStock float64 `json:"total_in_stock,omitempty"`
 	MinimumStock float64 `json:"minimum_stock"`
 	Units        string  `json:"units"`
 	Active       bool    `json:"active"`
@@ -137,6 +119,7 @@ type Category struct {
 	PK         int    `json:"pk"`
 	Name       string `json:"name"`
 	PathString string `json:"pathstring"`
+	Parent     *int   `json:"parent,omitempty"`
 }
 
 type StockItem struct {
@@ -144,147 +127,434 @@ type StockItem struct {
 	Part           int       `json:"part"`
 	Quantity       float64   `json:"quantity"`
 	Location       *int      `json:"location"`
-	LocationDetail *Location `json:"location_detail"`
+	LocationDetail *Location `json:"location_detail,omitempty"`
 	Batch          string    `json:"batch"`
 	Notes          string    `json:"notes"`
-	StatusText     string    `json:"status_text"`
+	StatusText     string    `json:"status_text,omitempty"`
 }
 
-// ---- Paginated fetchers ----
+// ---- Lookups (call with mu held) ----
 
-func fetchAll[T any](c *Client, path string, query url.Values) ([]T, error) {
-	if query == nil {
-		query = url.Values{}
-	}
-	query.Set("limit", "200")
-	var all []T
-	offset := 0
-	for {
-		query.Set("offset", fmt.Sprint(offset))
-		var page struct {
-			Count   int             `json:"count"`
-			Results json.RawMessage `json:"results"`
-		}
-		if err := c.do("GET", path, query, nil, &page); err != nil {
-			return nil, err
-		}
-		var batch []T
-		if err := json.Unmarshal(page.Results, &batch); err != nil {
-			return nil, err
-		}
-		all = append(all, batch...)
-		offset += len(batch)
-		if offset >= page.Count || len(batch) == 0 {
-			return all, nil
+func (c *Client) partIdx(pk int) int {
+	for i := range c.db.Parts {
+		if c.db.Parts[i].PK == pk {
+			return i
 		}
 	}
+	return -1
 }
+
+func (c *Client) stockIdx(pk int) int {
+	for i := range c.db.Stock {
+		if c.db.Stock[i].PK == pk {
+			return i
+		}
+	}
+	return -1
+}
+
+func (c *Client) location(pk int) *Location {
+	for i := range c.db.Locations {
+		if c.db.Locations[i].PK == pk {
+			l := c.db.Locations[i]
+			return &l
+		}
+	}
+	return nil
+}
+
+func (c *Client) categoryName(pk int) string {
+	for _, cat := range c.db.Categories {
+		if cat.PK == pk {
+			return cat.PathString
+		}
+	}
+	return ""
+}
+
+// decoratePart fills in the derived fields the server used to compute.
+func (c *Client) decoratePart(p Part) Part {
+	p.CategoryName = c.categoryName(p.Category)
+	p.TotalInStock = 0
+	for _, s := range c.db.Stock {
+		if s.Part == p.PK && s.Quantity > 0 {
+			p.TotalInStock += s.Quantity
+		}
+	}
+	return p
+}
+
+func (c *Client) decorateStock(s StockItem) StockItem {
+	s.LocationDetail = nil
+	if s.Location != nil {
+		s.LocationDetail = c.location(*s.Location)
+	}
+	s.StatusText = "OK"
+	return s
+}
+
+// ---- Fetchers ----
 
 func (c *Client) FetchParts() ([]Part, error) {
-	return fetchAll[Part](c, "/api/part/", nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Part, 0, len(c.db.Parts))
+	for _, p := range c.db.Parts {
+		out = append(out, c.decoratePart(p))
+	}
+	return out, nil
 }
 
 func (c *Client) FetchStock() ([]StockItem, error) {
-	q := url.Values{}
-	// location_detail is the key to seeing which bin an item lives in --
-	// the bare stock record only carries the location pk.
-	q.Set("location_detail", "true")
-	q.Set("in_stock", "true")
-	return fetchAll[StockItem](c, "/api/stock/", q)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []StockItem
+	for _, s := range c.db.Stock {
+		if s.Quantity > 0 {
+			out = append(out, c.decorateStock(s))
+		}
+	}
+	return out, nil
 }
 
 func (c *Client) FetchLocations() ([]Location, error) {
-	return fetchAll[Location](c, "/api/stock/location/", nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]Location(nil), c.db.Locations...), nil
 }
 
 func (c *Client) FetchCategories() ([]Category, error) {
-	return fetchAll[Category](c, "/api/part/category/", nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]Category(nil), c.db.Categories...), nil
 }
 
 func (c *Client) FetchPart(pk int) (Part, error) {
-	var p Part
-	err := c.do("GET", fmt.Sprintf("/api/part/%d/", pk), nil, nil, &p)
-	return p, err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.partIdx(pk)
+	if i < 0 {
+		return Part{}, fmt.Errorf("part %d not found", pk)
+	}
+	return c.decoratePart(c.db.Parts[i]), nil
 }
 
 func (c *Client) FetchStockForPart(pk int) ([]StockItem, error) {
-	q := url.Values{}
-	q.Set("part", fmt.Sprint(pk))
-	q.Set("location_detail", "true")
-	q.Set("in_stock", "true")
-	return fetchAll[StockItem](c, "/api/stock/", q)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []StockItem
+	for _, s := range c.db.Stock {
+		if s.Part == pk && s.Quantity > 0 {
+			out = append(out, c.decorateStock(s))
+		}
+	}
+	return out, nil
 }
 
-// ---- Mutations ----
+// ---- Part mutations ----
+
+// applyPartFields copies the editable fields the form/journal send.
+func applyPartFields(p *Part, fields map[string]any) error {
+	for k, v := range fields {
+		switch k {
+		case "name":
+			p.Name = asString(v)
+		case "IPN":
+			p.IPN = asString(v)
+		case "description":
+			p.Description = asString(v)
+		case "keywords":
+			p.Keywords = asString(v)
+		case "units":
+			p.Units = asString(v)
+		case "link":
+			p.Link = asString(v)
+		case "category":
+			p.Category = int(asFloat(v))
+		case "minimum_stock":
+			p.MinimumStock = asFloat(v)
+		case "active":
+			if b, ok := v.(bool); ok {
+				p.Active = b
+			}
+		}
+	}
+	if strings.TrimSpace(p.Name) == "" {
+		return errors.New("name: this field may not be blank")
+	}
+	return nil
+}
 
 func (c *Client) CreatePart(fields map[string]any) (Part, error) {
-	var p Part
-	err := c.do("POST", "/api/part/", nil, fields, &p)
-	return p, err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := Part{Active: true}
+	if err := applyPartFields(&p, fields); err != nil {
+		return Part{}, err
+	}
+	p.PK = c.newID()
+	c.db.Parts = append(c.db.Parts, p)
+	if err := c.saveLocked(); err != nil {
+		return Part{}, err
+	}
+	return c.decoratePart(p), nil
 }
 
 func (c *Client) UpdatePart(pk int, fields map[string]any) (Part, error) {
-	var p Part
-	err := c.do("PATCH", fmt.Sprintf("/api/part/%d/", pk), nil, fields, &p)
-	return p, err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.partIdx(pk)
+	if i < 0 {
+		return Part{}, fmt.Errorf("part %d not found", pk)
+	}
+	p := c.db.Parts[i]
+	if err := applyPartFields(&p, fields); err != nil {
+		return Part{}, err
+	}
+	c.db.Parts[i] = p
+	if err := c.saveLocked(); err != nil {
+		return Part{}, err
+	}
+	return c.decoratePart(p), nil
 }
 
-// DeletePart deactivates the part first (InvenTree refuses to delete an
-// active part), then deletes it.
+// DeletePart removes the part and all of its stock.
 func (c *Client) DeletePart(pk int) error {
-	if _, err := c.UpdatePart(pk, map[string]any{"active": false}); err != nil {
-		return err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.partIdx(pk)
+	if i < 0 {
+		return fmt.Errorf("part %d not found", pk)
 	}
-	return c.do("DELETE", fmt.Sprintf("/api/part/%d/", pk), nil, nil, nil)
+	c.db.Parts = append(c.db.Parts[:i], c.db.Parts[i+1:]...)
+	kept := c.db.Stock[:0]
+	for _, s := range c.db.Stock {
+		if s.Part != pk {
+			kept = append(kept, s)
+		}
+	}
+	c.db.Stock = kept
+	return c.saveLocked()
 }
+
+// ---- Stock mutations ----
 
 func (c *Client) CreateStock(part int, quantity float64, location int) (StockItem, error) {
-	body := map[string]any{"part": part, "quantity": quantity}
-	if location > 0 {
-		body["location"] = location
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.partIdx(part) < 0 {
+		return StockItem{}, fmt.Errorf("part %d not found", part)
 	}
-	// The response is a single object, or an array when serial numbers are
-	// involved -- accept both.
-	var raw json.RawMessage
-	if err := c.do("POST", "/api/stock/", nil, body, &raw); err != nil {
+	if quantity < 0 {
+		return StockItem{}, errors.New("quantity must be zero or more")
+	}
+	s := StockItem{PK: c.newID(), Part: part, Quantity: quantity}
+	if location > 0 {
+		if c.location(location) == nil {
+			return StockItem{}, fmt.Errorf("bin %d not found", location)
+		}
+		loc := location
+		s.Location = &loc
+	}
+	c.db.Stock = append(c.db.Stock, s)
+	if err := c.saveLocked(); err != nil {
 		return StockItem{}, err
 	}
-	var s StockItem
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil
-	}
-	var many []StockItem
-	if err := json.Unmarshal(raw, &many); err == nil && len(many) > 0 {
-		return many[0], nil
-	}
-	return StockItem{}, fmt.Errorf("unexpected stock create response: %s", truncate(string(raw), 200))
+	return c.decorateStock(s), nil
 }
 
 func (c *Client) DeleteStock(pk int) error {
-	return c.do("DELETE", fmt.Sprintf("/api/stock/%d/", pk), nil, nil, nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.stockIdx(pk)
+	if i < 0 {
+		return fmt.Errorf("stock item %d not found", pk)
+	}
+	c.db.Stock = append(c.db.Stock[:i], c.db.Stock[i+1:]...)
+	return c.saveLocked()
 }
 
-type stockOp struct {
-	PK       int     `json:"pk"`
-	Quantity float64 `json:"quantity"`
+func (c *Client) setQty(pk int, f func(old float64) (float64, error)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.stockIdx(pk)
+	if i < 0 {
+		return fmt.Errorf("stock item %d not found", pk)
+	}
+	q, err := f(c.db.Stock[i].Quantity)
+	if err != nil {
+		return err
+	}
+	c.db.Stock[i].Quantity = q
+	return c.saveLocked()
 }
 
 func (c *Client) StockAdd(pk int, qty float64) error {
-	return c.do("POST", "/api/stock/add/", nil,
-		map[string]any{"items": []stockOp{{pk, qty}}}, nil)
+	return c.setQty(pk, func(old float64) (float64, error) {
+		if qty <= 0 {
+			return 0, errors.New("quantity must be greater than zero")
+		}
+		return old + qty, nil
+	})
 }
 
 func (c *Client) StockRemove(pk int, qty float64) error {
-	return c.do("POST", "/api/stock/remove/", nil,
-		map[string]any{"items": []stockOp{{pk, qty}}}, nil)
+	return c.setQty(pk, func(old float64) (float64, error) {
+		if qty <= 0 {
+			return 0, errors.New("quantity must be greater than zero")
+		}
+		if qty > old {
+			return 0, fmt.Errorf("can't remove %s, only %s in stock", fmtQty(qty), fmtQty(old))
+		}
+		return old - qty, nil
+	})
 }
 
 func (c *Client) StockCount(pk int, qty float64) error {
-	return c.do("POST", "/api/stock/count/", nil,
-		map[string]any{"items": []stockOp{{pk, qty}}}, nil)
+	return c.setQty(pk, func(float64) (float64, error) {
+		if qty < 0 {
+			return 0, errors.New("count can't be negative")
+		}
+		return qty, nil
+	})
 }
 
+// StockTransfer moves qty to another bin. Moving everything relocates the
+// item; moving part of it splits off a new stock item, like InvenTree does.
 func (c *Client) StockTransfer(pk int, qty float64, location int) error {
-	return c.do("POST", "/api/stock/transfer/", nil,
-		map[string]any{"items": []stockOp{{pk, qty}}, "location": location}, nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := c.stockIdx(pk)
+	if i < 0 {
+		return fmt.Errorf("stock item %d not found", pk)
+	}
+	var dest *int
+	if location > 0 {
+		if c.location(location) == nil {
+			return fmt.Errorf("bin %d not found", location)
+		}
+		loc := location
+		dest = &loc
+	}
+	s := c.db.Stock[i]
+	if qty <= 0 || qty > s.Quantity {
+		return fmt.Errorf("can't move %s, only %s in stock", fmtQty(qty), fmtQty(s.Quantity))
+	}
+	if qty == s.Quantity {
+		c.db.Stock[i].Location = dest
+	} else {
+		c.db.Stock[i].Quantity -= qty
+		c.db.Stock = append(c.db.Stock, StockItem{PK: c.newID(), Part: s.Part, Quantity: qty, Location: dest})
+	}
+	return c.saveLocked()
+}
+
+// ---- Bins and categories ----
+
+// CreateLocation creates a bin from a path like "Garage/Shelf 2/Box A",
+// creating any missing parent bins along the way. Returns the deepest one.
+func (c *Client) CreateLocation(path string) (Location, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	names := splitPath(path)
+	if len(names) == 0 {
+		return Location{}, errors.New("bin name can't be blank")
+	}
+	var parent *int
+	var cur Location
+	for depth, name := range names {
+		full := strings.Join(names[:depth+1], "/")
+		found := false
+		for _, l := range c.db.Locations {
+			if strings.EqualFold(l.PathString, full) {
+				cur, found = l, true
+				break
+			}
+		}
+		if !found {
+			cur = Location{PK: c.newID(), Name: name, PathString: full, Parent: parent}
+			c.db.Locations = append(c.db.Locations, cur)
+		}
+		pk := cur.PK
+		parent = &pk
+	}
+	sort.Slice(c.db.Locations, func(i, j int) bool {
+		return c.db.Locations[i].PathString < c.db.Locations[j].PathString
+	})
+	return cur, c.saveLocked()
+}
+
+// CreateCategory works like CreateLocation: "Electronics/Resistors".
+func (c *Client) CreateCategory(path string) (Category, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	names := splitPath(path)
+	if len(names) == 0 {
+		return Category{}, errors.New("category name can't be blank")
+	}
+	var parent *int
+	var cur Category
+	for depth, name := range names {
+		full := strings.Join(names[:depth+1], "/")
+		found := false
+		for _, cat := range c.db.Categories {
+			if strings.EqualFold(cat.PathString, full) {
+				cur, found = cat, true
+				break
+			}
+		}
+		if !found {
+			cur = Category{PK: c.newID(), Name: name, PathString: full, Parent: parent}
+			c.db.Categories = append(c.db.Categories, cur)
+		}
+		pk := cur.PK
+		parent = &pk
+	}
+	sort.Slice(c.db.Categories, func(i, j int) bool {
+		return c.db.Categories[i].PathString < c.db.Categories[j].PathString
+	})
+	return cur, c.saveLocked()
+}
+
+func splitPath(path string) []string {
+	var out []string
+	for _, s := range strings.Split(path, "/") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// ---- small helpers ----
+
+func asString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
+func asFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	case string:
+		var f float64
+		fmt.Sscan(strings.TrimSpace(n), &f)
+		return f
+	}
+	return 0
 }

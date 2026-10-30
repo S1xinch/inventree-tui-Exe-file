@@ -64,6 +64,8 @@ func (a *App) helpColumns() (left, right []string) {
 		"",
 		"Anywhere",
 		"  ctrl+z / y     undo / redo",
+		"  ctrl+l         list what's low (below its min stock)",
+		"  is:low         search filter: only low items",
 		"  ctrl+r / F5    refresh data",
 		"  F2 / F3        text size",
 		"  ctrl+b         mute / unmute",

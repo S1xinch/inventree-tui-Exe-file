@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -182,14 +181,7 @@ func TestBusyGateSerializesMutations(t *testing.T) {
 // Live undo round-trip: the scary case -- delete a part, then resurrect it
 // from the journal pre-image. Skipped unless INVENTREE_* env vars are set.
 func TestLiveUndoDeletePart(t *testing.T) {
-	url, user, pass := os.Getenv("INVENTREE_URL"), os.Getenv("INVENTREE_USERNAME"), os.Getenv("INVENTREE_PASSWORD")
-	if url == "" || user == "" || pass == "" {
-		t.Skip("INVENTREE_* env vars not set")
-	}
-	c := NewClient(url, user, pass)
-	if err := c.Login(); err != nil {
-		t.Fatal(err)
-	}
+	c := testStore(t)
 	j := tempJournal(t)
 
 	cats, err := c.FetchCategories()
@@ -270,14 +262,7 @@ func TestLiveUndoDeletePart(t *testing.T) {
 
 // Live undo -> redo round-trip on a quantity change.
 func TestLiveUndoRedoStockAdd(t *testing.T) {
-	url, user, pass := os.Getenv("INVENTREE_URL"), os.Getenv("INVENTREE_USERNAME"), os.Getenv("INVENTREE_PASSWORD")
-	if url == "" || user == "" || pass == "" {
-		t.Skip("INVENTREE_* env vars not set")
-	}
-	c := NewClient(url, user, pass)
-	if err := c.Login(); err != nil {
-		t.Fatal(err)
-	}
+	c := testStore(t)
 	j := tempJournal(t)
 
 	cats, _ := c.FetchCategories()

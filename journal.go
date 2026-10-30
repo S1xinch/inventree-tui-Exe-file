@@ -11,7 +11,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -209,23 +208,27 @@ func snapshot(c *Client, e *JEntry) error {
 	if e.PartPK == 0 {
 		return nil
 	}
-	var part json.RawMessage
-	if err := c.do("GET", fmt.Sprintf("/api/part/%d/", e.PartPK), nil, nil, &part); err != nil {
+	p, err := c.FetchPart(e.PartPK)
+	if err != nil {
+		return fmt.Errorf("pre-image snapshot failed (aborting): %w", err)
+	}
+	part, err := json.Marshal(p)
+	if err != nil {
 		return fmt.Errorf("pre-image snapshot failed (aborting): %w", err)
 	}
 	e.PrePart = part
-	q := url.Values{}
-	q.Set("part", fmt.Sprint(e.PartPK))
-	q.Set("location_detail", "true")
-	q.Set("in_stock", "true")
-	q.Set("limit", "500")
-	var page struct {
-		Results []json.RawMessage `json:"results"`
-	}
-	if err := c.do("GET", "/api/stock/", q, nil, &page); err != nil {
+	stock, err := c.FetchStockForPart(e.PartPK)
+	if err != nil {
 		return fmt.Errorf("pre-image snapshot failed (aborting): %w", err)
 	}
-	e.PreStock = page.Results
+	e.PreStock = nil
+	for _, s := range stock {
+		raw, err := json.Marshal(s)
+		if err != nil {
+			return fmt.Errorf("pre-image snapshot failed (aborting): %w", err)
+		}
+		e.PreStock = append(e.PreStock, raw)
+	}
 	return nil
 }
 

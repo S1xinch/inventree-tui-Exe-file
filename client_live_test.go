@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 )
 
@@ -9,14 +8,7 @@ import (
 // INVENTREE_URL / INVENTREE_USERNAME / INVENTREE_PASSWORD are set.
 // Creates a throwaway part, runs every mutation the TUI uses, then deletes it.
 func TestLiveCRUD(t *testing.T) {
-	url, user, pass := os.Getenv("INVENTREE_URL"), os.Getenv("INVENTREE_USERNAME"), os.Getenv("INVENTREE_PASSWORD")
-	if url == "" || user == "" || pass == "" {
-		t.Skip("INVENTREE_* env vars not set")
-	}
-	c := NewClient(url, user, pass)
-	if err := c.Login(); err != nil {
-		t.Fatalf("login: %v", err)
-	}
+	c := testStore(t)
 
 	cats, err := c.FetchCategories()
 	if err != nil || len(cats) == 0 {

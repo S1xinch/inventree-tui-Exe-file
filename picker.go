@@ -24,6 +24,22 @@ type Picker struct {
 	formField  int   // >= 0: result goes to this form field
 	f          *flow // != nil: result continues this flow
 	returnMode mode
+	kind       string // "location" or "category": enables "+ new ..." from the filter text
+	createText string // filter text offered as a new entry ("" = none)
+}
+
+// createIdx is the pseudo option index for the "+ new ..." row.
+func (p *Picker) createIdx() int { return len(p.options) }
+
+func (p *Picker) labelAt(idx int) string {
+	if idx == p.createIdx() {
+		noun := "bin"
+		if p.kind == "category" {
+			noun = "category"
+		}
+		return "+ new " + noun + ": " + p.createText
+	}
+	return p.options[idx].Label
 }
 
 func newPicker(title string, options []PickerOpt) *Picker {
@@ -36,12 +52,22 @@ func newPicker(title string, options []PickerOpt) *Picker {
 }
 
 func (p *Picker) refilter() {
-	q := strings.ToLower(strings.TrimSpace(p.filter.Value()))
+	raw := strings.TrimSpace(p.filter.Value())
+	q := strings.ToLower(raw)
 	p.filtered = p.filtered[:0]
+	exact := false
 	for i, o := range p.options {
 		if q == "" || strings.Contains(strings.ToLower(o.Label), q) {
 			p.filtered = append(p.filtered, i)
 		}
+		if strings.EqualFold(o.Label, raw) {
+			exact = true
+		}
+	}
+	p.createText = ""
+	if p.kind != "" && raw != "" && !exact {
+		p.createText = raw
+		p.filtered = append(p.filtered, p.createIdx())
 	}
 	if p.cursor >= len(p.filtered) {
 		p.cursor = len(p.filtered) - 1
@@ -60,7 +86,7 @@ func (a *App) locationOptions() []PickerOpt {
 }
 
 func (a *App) categoryOptions() []PickerOpt {
-	var opts []PickerOpt
+	opts := []PickerOpt{{ID: 0, Label: "(no category)"}}
 	for _, c := range a.categories {
 		opts = append(opts, PickerOpt{ID: c.PK, Label: c.PathString})
 	}
@@ -76,6 +102,7 @@ func (a *App) pickerOptionsFor(kind string) []PickerOpt {
 
 func (a *App) openLocationPicker(f *flow, title string) {
 	p := newPicker(title, a.locationOptions())
+	p.kind = "location"
 	p.f = f
 	p.returnMode = modeDetail
 	a.picker = p
@@ -143,7 +170,16 @@ func (a *App) pickerChoose(idx int) (tea.Model, tea.Cmd) {
 	if idx < 0 || idx >= len(p.filtered) {
 		return a, nil
 	}
-	opt := p.options[p.filtered[idx]]
+	var opt PickerOpt
+	if p.filtered[idx] == p.createIdx() {
+		var err error
+		if opt, err = a.createPickerEntry(p.kind, p.createText); err != nil {
+			a.setStatus(err.Error(), true)
+			return a, nil
+		}
+	} else {
+		opt = p.options[p.filtered[idx]]
+	}
 	a.mode = p.returnMode
 	if p.f != nil {
 		return a.runMutation(a.flowLocationPicked(p.f, opt.ID))
@@ -188,14 +224,38 @@ func (p *Picker) view(a *App) string {
 			b.WriteString("\n")
 			continue
 		}
-		o := p.options[p.filtered[idx]]
-		line := truncate(o.Label, a.width-2)
+		line := truncate(p.labelAt(p.filtered[idx]), a.width-2)
 		if idx == p.cursor {
 			b.WriteString(stySel.Render(padRight(line, a.width-2)) + "\n")
 		} else {
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString(a.bottomBar("enter:choose  esc:cancel"))
+	hint := "enter:choose  esc:cancel"
+	if p.kind != "" {
+		hint = "type a new name to create it  " + hint
+	}
+	b.WriteString(a.bottomBar(hint))
 	return b.String()
+}
+
+// createPickerEntry makes a new bin or category (paths like "Garage/Shelf 2"
+// create parents too) and adds it to the app's in-memory lists.
+func (a *App) createPickerEntry(kind, name string) (PickerOpt, error) {
+	if kind == "category" {
+		cat, err := a.client.CreateCategory(name)
+		if err != nil {
+			return PickerOpt{}, err
+		}
+		a.categories, _ = a.client.FetchCategories()
+		a.setStatus("new category: "+cat.PathString, false)
+		return PickerOpt{ID: cat.PK, Label: cat.PathString}, nil
+	}
+	loc, err := a.client.CreateLocation(name)
+	if err != nil {
+		return PickerOpt{}, err
+	}
+	a.locations, _ = a.client.FetchLocations()
+	a.setStatus("new bin: "+loc.PathString, false)
+	return PickerOpt{ID: loc.PK, Label: loc.PathString}, nil
 }

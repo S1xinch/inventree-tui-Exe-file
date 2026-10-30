@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,7 +10,7 @@ import (
 )
 
 func testApp() *App {
-	a := NewApp(NewClient("http://example.invalid", "u", "p"), 0)
+	a := NewApp(NewClient(filepath.Join(os.TempDir(), "inv-tui-test.json")), 0)
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	loc := Location{PK: 64, Name: "Bin 57", PathString: "Workshop/Bin 57"}
 	a.Update(dataLoadedMsg{
@@ -138,4 +140,22 @@ func TestNewPartForm(t *testing.T) {
 	if a.mode != modeSearch {
 		t.Fatalf("esc should cancel form")
 	}
+}
+
+// testStore opens an empty inventory file in a temp dir.
+func testStore(t *testing.T) *Client {
+	t.Helper()
+	c := NewClient(filepath.Join(t.TempDir(), "inventory.json"))
+	if err := c.Login(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Workshop/Bin 1", "Workshop/Bin 2"} {
+		if _, err := c.CreateLocation(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.CreateCategory("Electronics"); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

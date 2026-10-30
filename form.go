@@ -53,7 +53,7 @@ func (a *App) openPartForm(editPK int) {
 		textField("Keywords", p.Keywords, false),
 		textField("Units", p.Units, false),
 		textField("Min stock", fmtQty(p.MinimumStock), true),
-		{label: "Category", picker: "category", id: p.Category, display: p.CategoryName},
+		{label: "Category", picker: "category", id: p.Category, display: orDefault(p.CategoryName, "(no category)")},
 	}
 	if editPK == 0 {
 		if len(a.categories) > 0 {
@@ -94,6 +94,7 @@ func (a *App) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fld := &f.fields[f.cursor]
 			if fld.picker != "" {
 				p := newPicker("Choose "+strings.ToLower(fld.label), a.pickerOptionsFor(fld.picker))
+				p.kind = fld.picker
 				p.formField = f.cursor
 				p.returnMode = modeForm
 				a.picker = p
@@ -250,4 +251,11 @@ func (f *Form) view(a *App) string {
 	b.WriteString("\n" + styDim.Render("tab/↑↓:fields  enter:next/pick  ctrl+s:save  esc:cancel") + "\n")
 	b.WriteString(a.statusBar())
 	return b.String()
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

@@ -1,11 +1,38 @@
-# inv-tui
+# inv-tui (offline edition)
 
-A fast terminal UI for [InvenTree](https://inventree.org/) home inventory,
-built for the Raspberry Pi 1 B+ kiosk (touchscreen + USB keyboard) where the
-InvenTree web UI is unusably slow. Single static Go binary, no runtime
-dependencies, talks to the standard InvenTree REST API.
+A fast terminal inventory app for your home: where is it, how many are left, and what's running low. This fork runs **entirely on your own computer, with no server**. Everything is saved to `inventory.json` next to the program.
 
-Built with [bubbletea](https://github.com/charmbracelet/bubbletea).
+Forked from [AndrewYatzkan/inventree-tui](https://github.com/AndrewYatzkan/inventree-tui), which talks to an InvenTree server. This version swaps the server for a local JSON file and adds low-stock alerts.
+
+## Download and run
+
+Ready-built programs are in the [`windows/`](windows/) and [`mac/`](mac/) folders.
+
+- **Windows:** put `inv-tui.exe` in its own folder (e.g. `C:\Inventory`) and double-click it. Windows SmartScreen may warn because the file is unsigned: choose "More info" then "Run anyway".
+- **Mac (Apple Silicon):** in Terminal, in the folder with the file:
+  ```
+  chmod +x inv-tui-mac
+  xattr -d com.apple.quarantine inv-tui-mac
+  ./inv-tui-mac
+  ```
+
+Your data is saved in `inventory.json` in the same folder as the program. Back that file up and you've backed up everything. Use `-data path/to/file.json` to keep it somewhere else.
+
+## Getting started
+
+1. Press `ctrl+n` to add an item. Give it a name, a **Min stock** (the level you want to be warned at), how many you have, and a bin.
+2. In the bin or category picker, **type a new name to create it**. Slashes make nested bins: `Garage/Shelf 2/Box A`.
+3. Type to search. Open an item with `enter` to add, remove, count or move stock.
+
+## Low-stock alerts
+
+Every 2 minutes (and at startup) the app checks for items below their **Min stock**:
+
+- The top-right corner shows how many items are low, in red.
+- An alert line lists the emptiest ones and the terminal beeps.
+- `ctrl+l` (or searching `is:low`) lists everything that's low.
+
+Only items with a Min stock set are checked.
 
 ## Why it's fast
 
@@ -38,7 +65,7 @@ alias), and `cat:tools` filters by category.
 | `ctrl+n` | create a new part |
 | `ctrl+h` | ask hermes (if configured) |
 | `ctrl+z` / `ctrl+y` | undo / redo the last change |
-| `ctrl+r` / `f5` | re-sync from server |
+| `ctrl+r` / `f5` | reload from file |
 | `F1` (or `?` in detail view) | help overlay with all shortcuts |
 | `F2` / `F3` (or `alt+-` / `alt++`) | smaller / bigger text (persisted across reboots) |
 | `ctrl+q` / `ctrl+c` | quit |
@@ -65,7 +92,7 @@ thinking indicator with elapsed time shows while it works.
 
 ### Undo / mutation journal
 
-InvenTree tracks stock history server-side but has no undo, and deletes are
+The inventory file has no history of its own, and deletes are
 permanent. So every mutation this binary makes (part create/edit/delete,
 stock add/remove/count/move/create/delete) is journaled to
 `~/.local/state/inv-tui/journal.jsonl` (override with `INV_TUI_JOURNAL`) with
@@ -105,11 +132,9 @@ inv-tui needs to be in the `input` group (or root).
 
 ## Configuration
 
-Read from `/etc/inv-tui.env`, then `~/.config/inv-tui/env`, then environment
-variables, then flags (`-url`, `-user`, `-pass`, `-touch`). See
-`env.example`. Credentials are exchanged for an API token at startup.
+Optional. Read from `/etc/inv-tui.env`, then `~/.config/inv-tui/env`, then environment variables, then flags (`-data`, `-touch`). See `env.example`.
 
-Sanity check connectivity with `inv-tui -check`.
+`inv-tui -check` loads the inventory file and prints a summary.
 
 ## Building & deploying
 
@@ -133,7 +158,6 @@ console-setup` (e.g. Terminus 16x32).
 
 ## Tests
 
-`go test ./...` runs the UI model tests. With `INVENTREE_URL`,
-`INVENTREE_USERNAME`, `INVENTREE_PASSWORD` set it also runs a live CRUD
-round-trip (creates and deletes a throwaway part named "ZZZ inv-tui
-self-test part").
+`go test ./...` runs the UI, store, undo/redo and low-stock tests against a temporary inventory file.
+
+Cross-compile the downloads with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o windows/inv-tui.exe .` and `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o mac/inv-tui-mac .`

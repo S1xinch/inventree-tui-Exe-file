@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AndrewYatzkan/inventree-tui/buzz"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/AndrewYatzkan/inventree-tui/buzz"
 )
 
 type mode int
@@ -79,6 +79,9 @@ type App struct {
 	// (which would otherwise race the journal append and undo the same entry
 	// twice) impossible.
 	busy bool
+
+	lowAlertPending bool // raise the low-stock alert when the next load lands
+	quietReload     bool // background reload: don't announce "loaded N parts"
 }
 
 // flow tracks a multi-step stock operation (qty prompt -> location pick -> exec).
@@ -102,11 +105,12 @@ func NewApp(client *Client, buzzerPin uint) *App {
 	a.journal = openJournal()
 	a.fonts = newFontCtl()
 	a.buzzer = buzz.NewBuzzer(buzzerPin)
+	a.lowAlertPending = true // check right after the first load
 	return a
 }
 
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.loadAllCmd(), a.search.input.Cursor.BlinkCmd(), statusTick())
+	return tea.Batch(a.loadAllCmd(), a.search.input.Cursor.BlinkCmd(), statusTick(), lowStockTick())
 }
 
 // ---- Messages ----
@@ -265,6 +269,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		case "f1":
 			return a, a.openHelp()
+		case "ctrl+l":
+			if a.mode == modeSearch || a.mode == modeDetail {
+				a.showLowStock()
+				return a, nil
+			}
 		case "ctrl+b":
 			if muted := a.buzzer.ToggleMute(); muted {
 				a.setStatus("sound off", false)
@@ -304,12 +313,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.mode = modeSearch
 		}
 		a.search.refilter(a)
+		quiet := a.quietReload
+		a.quietReload = false
 		if msg.note != "" {
 			a.setStatus(msg.note, false)
-		} else {
+		} else if !quiet {
 			a.setStatus(fmt.Sprintf("loaded %d parts, %d stock items", len(a.parts), len(msg.stock)), false)
 		}
+		if a.lowAlertPending {
+			a.raiseLowAlert()
+		}
 		return a, nil
+
+	case lowStockTickMsg:
+		return a, a.onLowStockTick()
 
 	case partRefreshedMsg:
 		a.busy = false

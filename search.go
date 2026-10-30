@@ -32,6 +32,7 @@ type searchDoc struct {
 	cat             string   // lowercased category path
 	locNames        []string // lowercased stock location names ("bin 57")
 	locPaths        []string // lowercased stock location paths
+	low             bool     // below its minimum stock (is:low)
 	nameWords       [][]rune // for fuzzy matching
 	allWords        [][]rune
 }
@@ -54,6 +55,7 @@ func (a *App) rebuildDocs() {
 		d.name = strings.ToLower(p.Name)
 		d.ipn = strings.ToLower(p.IPN)
 		d.cat = strings.ToLower(p.CategoryName)
+		d.low = isLow(p)
 		d.locNames, d.locPaths = nil, nil
 		for _, s := range a.stockByPart[p.PK] {
 			if s.LocationDetail != nil {
@@ -78,6 +80,8 @@ func (d *searchDoc) matchesFilter(key, val string) bool {
 		return matchBinFilter(d.locNames, d.locPaths, val)
 	case "cat":
 		return strings.Contains(d.cat, val)
+	case "is":
+		return val == "low" && d.low
 	}
 	return false
 }
@@ -94,7 +98,7 @@ func isDigits(s string) bool {
 	return true
 }
 
-func isFilterKey(k string) bool { return k == "bin" || k == "loc" || k == "cat" }
+func isFilterKey(k string) bool { return k == "bin" || k == "loc" || k == "cat" || k == "is" }
 
 // refilter recomputes results from the query. All whitespace-separated terms
 // must match somewhere in the part (name, IPN, description, keywords,
@@ -311,11 +315,20 @@ func (a *App) viewSearch() string {
 	if a.loading {
 		count += " ⟳"
 	}
+	lowTag := ""
+	if n := len(a.lowParts()); n > 0 {
+		lowTag = fmt.Sprintf("%d low", n)
+		count = lowTag + "  " + count
+	}
 	inputW := a.width - len(count) - 2
 	sv.input.Width = max(10, inputW-4)
 	line := sv.input.View()
 	b.WriteString(padRight(truncate(line, inputW), inputW))
-	b.WriteString("  " + styDim.Render(count) + "\n")
+	if lowTag != "" {
+		b.WriteString("  " + styErr.Render(lowTag) + styDim.Render(strings.TrimPrefix(count, lowTag)) + "\n")
+	} else {
+		b.WriteString("  " + styDim.Render(count) + "\n")
+	}
 
 	// column widths: qty fixed, bin ~35%, name the rest
 	qtyW := 6

@@ -16,11 +16,9 @@ import (
 // ~/.config/inv-tui/env, environment variables, command-line flags.
 // File format is plain KEY=VALUE lines (see .env.example).
 type Config struct {
-	URL      string
-	Username string
-	Password string
-	Touch    string // touch input device: "auto", "off", or /dev/input/eventN
-	BuzzerPin int   // GPIO pin for the pigpiod buzzer (default 17; 0 = disable)
+	DataFile  string // inventory JSON file (default: inventory.json next to the program)
+	Touch     string // touch input device: "auto", "off", or /dev/input/eventN
+	BuzzerPin int    // GPIO pin for the pigpiod buzzer (default 17; 0 = disable)
 
 	// optional hermes home-agent handoff (ctrl+h); disabled when unset
 	HermesURL   string
@@ -53,7 +51,7 @@ func loadConfig() Config {
 	if home, err := os.UserHomeDir(); err == nil {
 		loadEnvFile(filepath.Join(home, ".config", "inv-tui", "env"), vars)
 	}
-	for _, k := range []string{"INVENTREE_URL", "INVENTREE_USERNAME", "INVENTREE_PASSWORD",
+	for _, k := range []string{"INV_TUI_DATA",
 		"INV_TUI_TOUCH", "INV_TUI_BUZZER_PIN", "HERMES_URL", "HERMES_KEY", "HERMES_MODEL"} {
 		if v := os.Getenv(k); v != "" {
 			vars[k] = v
@@ -66,14 +64,15 @@ func loadConfig() Config {
 		}
 	}
 	cfg := Config{
-		URL:         vars["INVENTREE_URL"],
-		Username:    vars["INVENTREE_USERNAME"],
-		Password:    vars["INVENTREE_PASSWORD"],
+		DataFile:    vars["INV_TUI_DATA"],
 		Touch:       vars["INV_TUI_TOUCH"],
 		BuzzerPin:   buzzerPin,
 		HermesURL:   vars["HERMES_URL"],
 		HermesKey:   vars["HERMES_KEY"],
 		HermesModel: vars["HERMES_MODEL"],
+	}
+	if cfg.DataFile == "" {
+		cfg.DataFile = DefaultDataPath()
 	}
 	if cfg.Touch == "" {
 		cfg.Touch = "auto"
@@ -83,31 +82,24 @@ func loadConfig() Config {
 
 func main() {
 	cfg := loadConfig()
-	urlFlag := flag.String("url", cfg.URL, "InvenTree base URL (e.g. https://inv.example.net)")
-	userFlag := flag.String("user", cfg.Username, "InvenTree username")
-	passFlag := flag.String("pass", cfg.Password, "InvenTree password")
+	dataFlag := flag.String("data", cfg.DataFile, "inventory JSON file")
 	touchFlag := flag.String("touch", cfg.Touch, "touchscreen evdev device: auto, off, or /dev/input/eventN")
-	check := flag.Bool("check", false, "fetch data, print summary, and exit (connectivity test)")
+	check := flag.Bool("check", false, "load the inventory file, print a summary, and exit")
 	logN := flag.Int("log", 0, "print the last N journal entries and exit")
 	undoID := flag.Int("undo", 0, "undo the journal entry with this ID (see -log) and exit")
 	flag.Parse()
 
-	cfg.URL, cfg.Username, cfg.Password, cfg.Touch = *urlFlag, *userFlag, *passFlag, *touchFlag
+	cfg.DataFile, cfg.Touch = *dataFlag, *touchFlag
 
 	if *logN > 0 {
 		printJournal(*logN)
 		return
 	}
 
-	if cfg.URL == "" || cfg.Username == "" || cfg.Password == "" {
-		fmt.Fprintln(os.Stderr, "missing config: set INVENTREE_URL, INVENTREE_USERNAME, INVENTREE_PASSWORD")
-		fmt.Fprintln(os.Stderr, "(via env vars, ~/.config/inv-tui/env, /etc/inv-tui.env, or flags)")
-		os.Exit(1)
-	}
-
-	client := NewClient(cfg.URL, cfg.Username, cfg.Password)
+	client := NewClient(cfg.DataFile)
 	if err := client.Login(); err != nil {
-		fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "can't open inventory file: %v\n", err)
+		pauseIfDoubleClicked()
 		os.Exit(1)
 	}
 
@@ -135,6 +127,7 @@ func main() {
 	startTouchInput(prog, cfg.Touch)
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		pauseIfDoubleClicked()
 		os.Exit(1)
 	}
 }
@@ -148,6 +141,7 @@ func runCheck(c *Client) {
 	fatalIf(err)
 	cats, err := c.FetchCategories()
 	fatalIf(err)
+	fmt.Printf("file: %s\n", c.BaseURL)
 	fmt.Printf("ok: %d parts, %d stock items, %d locations, %d categories\n",
 		len(parts), len(stock), len(locs), len(cats))
 }
@@ -191,4 +185,11 @@ func runUndo(c *Client, id int) {
 		}
 	}
 	fatalIf(fmt.Errorf("no journal entry #%d (see -log)", id))
+}
+
+// pauseIfDoubleClicked keeps an error on screen long enough to read when the
+// program was launched by double-click (its console closes on exit).
+func pauseIfDoubleClicked() {
+	fmt.Fprintln(os.Stderr, "\npress Enter to close")
+	bufio.NewReader(os.Stdin).ReadString('\n')
 }
