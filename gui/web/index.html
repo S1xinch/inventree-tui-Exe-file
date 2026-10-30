@@ -183,6 +183,8 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const fmt = n => Number.isInteger(n) ? String(n) : n.toFixed(2);
 // Stock status. Only items with a minimum are judged; the rest stay neutral.
 const isLow = p => p.minimum_stock > 0 && (p.total_in_stock || 0) < p.minimum_stock;   // low OR out
+// how full an item is relative to its minimum (0 = empty); missing qty means 0
+const stockRatio = p => (p.total_in_stock || 0) / (p.minimum_stock || 1);
 const isOut = p => p.minimum_stock > 0 && (p.total_in_stock || 0) <= 0;
 const statusOf = p => isOut(p) ? "out" : isLow(p) ? "low" : "ok";
 // Shape + word, never colour alone: a cross for out, a triangle for low.
@@ -253,7 +255,7 @@ function render() {
     const hay = [p.name, p.IPN, p.description, p.keywords, p.category_name, binsText(p.pk)].join(" ").toLowerCase();
     return terms.every(t => hay.includes(t));
   });
-  list.sort((a, b) => lowOnly ? (a.total_in_stock / a.minimum_stock) - (b.total_in_stock / b.minimum_stock) : a.name.localeCompare(b.name));
+  list.sort((a, b) => lowOnly ? stockRatio(a) - stockRatio(b) : a.name.localeCompare(b.name));
 
   $("rows").innerHTML = list.map(p => `
     <tr data-pk="${p.pk}" class="${statusOf(p)} ${selected === p.pk ? "sel" : ""}">
@@ -279,7 +281,7 @@ function renderDetail() {
     <div class="stat">
       <div class="${stCls}">In stock<b>${fmt(p.total_in_stock || 0)}${p.units ? " " + esc(p.units) : ""}</b></div>
       <div>Minimum<b>${p.minimum_stock ? fmt(p.minimum_stock) : "none"}</b></div>
-      ${low ? `<div class="${stCls}">Need<b>${fmt(p.minimum_stock - p.total_in_stock)} more</b></div>` : ""}
+      ${low ? `<div class="${stCls}">Need<b>${fmt(p.minimum_stock - (p.total_in_stock || 0))} more</b></div>` : ""}
     </div>
     ${meter(p)}
     ${p.description ? `<div class="notes">${esc(p.description)}</div>` : ""}
@@ -454,7 +456,7 @@ async function checkLow(fromTimer) {
     load.quiet = true;
     try { await load(); } catch (e) { return; } finally { load.quiet = false; }
   }
-  const low = S.parts.filter(isLow).sort((a, b) => a.total_in_stock / a.minimum_stock - b.total_in_stock / b.minimum_stock);
+  const low = S.parts.filter(isLow).sort((a, b) => stockRatio(a) - stockRatio(b));
   const banner = $("banner");
   if (!low.length) { banner.classList.remove("show"); lowSeen = new Set(); return; }
   const names = low.slice(0, 3).map(p => `${p.name} (${fmt(p.total_in_stock || 0)} of ${fmt(p.minimum_stock)})`);

@@ -36,7 +36,8 @@ var (
 	styOK       = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	styBin      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	styHeader   = lipgloss.NewStyle().Bold(true).Underline(true)
-	styLowStock = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	styLowStock = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // amber: below minimum
+	styOutStock = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))   // red: none left
 )
 
 type App struct {

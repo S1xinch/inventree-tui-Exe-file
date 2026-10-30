@@ -360,7 +360,10 @@ func (a *App) viewSearch() string {
 			b.WriteString(stySel.Render(full) + "\n")
 		} else {
 			qs := padRight(qty, qtyW)
-			if p.TotalInStock <= 0 || (p.MinimumStock > 0 && p.TotalInStock < p.MinimumStock) {
+			// same rules as the windowed app: only items with a minimum are judged
+			if p.MinimumStock > 0 && p.TotalInStock <= 0 {
+				qs = styOutStock.Render(qs)
+			} else if isLow(p) {
 				qs = styLowStock.Render(qs)
 			}
 			b.WriteString(padRight(name, nameW) + "  " + qs + "  " + styBin.Render(padRight(bins, binW)) + "\n")
