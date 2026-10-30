@@ -10,8 +10,8 @@ import (
 )
 
 // openWindow shows the app in a chromeless Edge (or Chrome) window with its
-// own profile, so it looks like a normal program and the launch blocks until
-// that window is closed. Returns true if it waited for the window.
+// own profile, so it looks like a normal program. Returns true if a window
+// was launched.
 func openWindow(url string, wait bool) bool {
 	profile := filepath.Join(os.Getenv("LOCALAPPDATA"), "InventoryApp", "window")
 	args := []string{
@@ -27,10 +27,8 @@ func openWindow(url string, wait bool) bool {
 			continue
 		}
 		cmd := exec.Command(exe, args...)
-		if !wait {
-			return cmd.Start() == nil
-		}
-		if err := cmd.Run(); err == nil {
+		if err := cmd.Start(); err == nil {
+			go cmd.Wait() // reap it; the page's goodbye decides when we quit
 			return true
 		}
 	}

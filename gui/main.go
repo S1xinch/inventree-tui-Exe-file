@@ -77,14 +77,11 @@ func main() {
 		select {} // run until killed
 	}
 
-	// openWindow blocks until the window closes when it could launch a
-	// dedicated Edge app window; otherwise it returns at once and the
-	// heartbeat decides when to quit.
-	if waited := openWindow(url, true); waited {
-		srv.waitForQuiet(5 * time.Second) // let a reload/second window reconnect
-		return
-	}
-	srv.waitForQuiet(3 * time.Minute)
+	// Don't trust the browser process to tell us when the window closes:
+	// Edge often hands off to another process and returns immediately.
+	// The page itself pings while open and says goodbye when it closes.
+	openWindow(url, false)
+	srv.waitUntilClosed()
 }
 
 // ---- server ----
@@ -94,6 +91,7 @@ type server struct {
 
 	mu       sync.Mutex
 	lastPing time.Time
+	byeAt    time.Time // last time a window said it was closing
 	modTime  time.Time
 }
 
@@ -103,14 +101,24 @@ func newServer(store *Client) *server {
 	return s
 }
 
-// waitForQuiet returns once no page has pinged for the given duration.
-func (s *server) waitForQuiet(d time.Duration) {
+// waitUntilClosed returns when the app window has gone: shortly after it
+// says goodbye (unless it pings again, e.g. after a reload), or after a long
+// silence. The silence limit is generous because Windows slows timers in
+// minimised windows to about once a minute.
+func (s *server) waitUntilClosed() {
+	const (
+		byeGrace   = 4 * time.Second
+		maxSilence = 3 * time.Minute
+	)
 	for {
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
 		s.mu.Lock()
-		idle := time.Since(s.lastPing)
+		ping, bye := s.lastPing, s.byeAt
 		s.mu.Unlock()
-		if idle > d {
+		if !bye.IsZero() && bye.After(ping) && time.Since(bye) > byeGrace {
+			return
+		}
+		if time.Since(ping) > maxSilence {
 			return
 		}
 	}
@@ -155,6 +163,12 @@ func (s *server) routes() http.Handler {
 		s.lastPing = time.Now()
 		s.mu.Unlock()
 		writeJSON(w, map[string]string{"app": "inventory"})
+	})
+	mux.HandleFunc("POST /api/bye", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.byeAt = time.Now()
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/state", s.handle(func(r *http.Request) (any, error) {
 		return s.state()
